@@ -1,0 +1,49 @@
+name: AVI oracle tests (storytold/filmcraft#2303)
+
+# Fork-only check for storytold/filmcraft#2303: runs the ffmpeg-oracle tests with ffmpeg installed,
+# so none of them can return early. Any "skipping" line, or a missing ffmpeg/ffprobe, fails the job.
+on:
+  push:
+    branches: [ci/avi-oracle-2303]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  avi-oracle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      FILMCRAFT_REQUIRE_ORACLES: "1"
+      # libtest's --report-time on a stable toolchain
+      RUSTC_BOOTSTRAP: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          command -v ffmpeg ffprobe
+          ffmpeg -hide_banner -version | head -1
+          ffmpeg -hide_banner -encoders | grep -E "libx264|libx265"
+      - name: Install Rust 1.95
+        run: rustup toolchain install 1.95 --profile minimal && rustup default 1.95
+      - name: Merge base
+        run: git log -3 --format='%H %s'
+      - name: filmcraft-codecs library tests (avi_tests and the MXF/TS decoders)
+        run: |
+          cargo test -p filmcraft-codecs --lib -- -Z unstable-options --report-time 2>&1 | tee codecs.log
+          if grep -nE "skipping|SKIPPED" codecs.log; then echo "::error::a test skipped"; exit 1; fi
+      - name: filmcraft-avi tests, including the ffmpeg oracle and the ignored OpenDML one
+        run: |
+          cargo test -p filmcraft-avi -- --include-ignored -Z unstable-options --report-time 2>&1 | tee avi.log
+          if grep -nE "skipping|SKIPPED" avi.log; then echo "::error::a test skipped"; exit 1; fi
+      - name: Fixtures ffmpeg generated in this run
+        run: ls -l target/fixtures/codecs target/fixtures/avi 2>/dev/null || ls -lR target/fixtures
